@@ -21,7 +21,7 @@ if cv2.__version__ < "4.0.0":
     raise ImportError("Requires opencv >= 4.0, "
                       "but found {:s}".format(cv2.__version__))
 
-launch_path = os.path.realpath(__file__).replace("nxp_track_judge/nxp_track_judge.py","")
+launch_path = os.path.realpath(__file__).replace("/nxp_track_judge.py","")
 track_path = os.path.realpath(os.path.relpath(os.path.join(launch_path,"../tracks")))
 output_path = os.path.realpath(os.path.relpath(os.path.join(launch_path,"../judge_output")))
 
@@ -131,7 +131,9 @@ class NXPTrackJudge(Node):
 
         self.trackImageHeight, self.trackImageWidth = self.evalImage.shape[:2]
 
-        self.returnedTrackImage = copy.deepcopy(self.evalImage)
+        self.evalImageBGR = cv2.cvtColor(self.evalImage, cv2.COLOR_GRAY2BGR)
+
+        self.returnedTrackImage = copy.deepcopy(self.evalImageBGR)
 
         self.lastPositionPixels = np.round(self.trackPositionOffset*self.pixelsPerMeter).astype(int)
         self.lastPositionPixels[0] = self.trackImageHeight-self.lastPositionPixels[0]
@@ -145,7 +147,7 @@ class NXPTrackJudge(Node):
         # Subscribers
         self.odometrySub = self.create_subscription(nav_msgs.msg.Odometry, 
             '/{:s}'.format(self.odometryTopic), 
-            self.odometryCallback)
+            self.odometryCallback, qos_profile_sensor_data)
 
         # Publishers
         self.trackImagePub = self.create_publisher(sensor_msgs.msg.Image,
@@ -158,19 +160,24 @@ class NXPTrackJudge(Node):
         positionPixels[0] = self.trackImageHeight-positionPixels[0] 
 
         if (self.evalImage[positionPixels[0]][positionPixels[1]] == 0) and not self.outsideBounds:
-            self.outsideBounds = True
+            self.outsideBounds = False
 
         if (self.evalImage[positionPixels[0]][positionPixels[1]] == 255) and not self.outsideBounds and (self.newLapFlag or self.endLapFlag):
             self.newLapFlag = False
             self.endLapFlag = False            
 
-        if (self.evalImage[positionPixels[0]][positionPixels[1]] == 192) and not self.outsideBounds and not self.endLapFlag and not self.newLapFlag:
+        if (self.evalImage[positionPixels[0]][positionPixels[1]] == 191) and not self.outsideBounds and not self.endLapFlag and not self.newLapFlag:
             self.endLapFlag = True
 
-        elif (self.evalImage[positionPixels[0]][positionPixels[1]] == 128) and not self.outsideBounds and self.endLapFlag and not self.newLapFlag:
+        if (self.evalImage[positionPixels[0]][positionPixels[1]] == 128) and not self.outsideBounds and self.endLapFlag and not self.newLapFlag:
             self.newLapFlag = True
             self.endLapFlag = False
             if self.lapStartTime > 0:
+                self.returnedTrackImage = cv2.putText(self.returnedTrackImage, 'Completed Lap {:d} Time: {:.2f} sec'.format(self.lapNumber, float(self.currentLapTime*1e-9)),
+                    (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0,0,255), 2, cv2.LINE_AA)
+                outputImage = os.path.realpath(os.path.relpath(os.path.join(output_path,'{:s}_lap-{:d}.png'.format(str(self.timeStamp), self.lapNumber))))
+                cv2.imwrite(outputImage, self.returnedTrackImage)
+
                 self.lapNumber += 1
                 self.lapStopTime = self.timeStamp
                 if self.bestLapTime is not None:
@@ -179,31 +186,39 @@ class NXPTrackJudge(Node):
                 else:
                     self.bestLapTime = self.timeStamp-self.lapStartTime
 
-                # TODO save completed lap image
+                
 
             self.lapStartTime = self.timeStamp
-            self.returnedTrackImage = copy.deepcopy(self.evalImage)
+            self.returnedTrackImage = copy.deepcopy(self.evalImageBGR)
 
 
         if self.lapStartTime > 0:
             self.currentLapTime = self.timeStamp-self.lapStartTime
         
-        if np.array_equal(self.lastPositionPixels, positionPixels):
+        if not np.array_equal(self.lastPositionPixels, positionPixels):
             self.returnedTrackImage = cv2.line(self.returnedTrackImage,
                 (self.lastPositionPixels[1], self.lastPositionPixels[0]),
                 (positionPixels[1], positionPixels[0]),
-                (255,128,128),1)
+                (255,128,128), 4)
+        self.returnedTrackImageTime = copy.deepcopy(self.returnedTrackImage)
+        self.returnedTrackImageTime = cv2.putText(self.returnedTrackImageTime, 'Lap {:d} Time: {:.2f} sec'.format(self.lapNumber, float(self.currentLapTime*1e-9)),
+            (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0,0,255), 2, cv2.LINE_AA)
+        
+        if self.bestLapTime is not None:
+            self.returnedTrackImageTime = cv2.putText(self.returnedTrackImageTime, 'Best Lap Time: {:.2f} sec'.format(float(self.bestLapTime*1e-9)),
+                (50, 100), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0,255,0), 2, cv2.LINE_AA)
+
         
         self.lastPositionPixels = positionPixels
         
-        return(self.returnedTrackImage)
+        return(self.returnedTrackImageTime)
       
     
     def odometryCallback(self, data):
 
         self.timeStamp = self.get_clock().now().nanoseconds
 
-        if (self.timeStamp-self.timeEvalStamp) >= (1.0/float(self.evaluationFrequency)):
+        if ((self.timeStamp-self.timeEvalStamp)*1e-9) >= (1.0/float(self.evaluationFrequency)):
 
             position = np.array([data.pose.pose.position.y, data.pose.pose.position.x])
 
