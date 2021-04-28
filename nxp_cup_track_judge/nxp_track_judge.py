@@ -16,6 +16,7 @@ import sensor_msgs.msg
 import nav_msgs.msg
 from cv_bridge import CvBridge
 from rclpy.qos import QoSProfile
+import json
 import cv2
 if cv2.__version__ < "4.0.0":
     raise ImportError("Requires opencv >= 4.0, "
@@ -117,6 +118,8 @@ class NXPTrackJudge(Node):
 
         self.lapStopTime = 0
 
+        self.outsideBoundsCount = 0
+
         self.trackPositionOffset = np.array([0.275, 16.5]) # [Y, X] for image coordinates in numpy
 
 
@@ -138,6 +141,8 @@ class NXPTrackJudge(Node):
         self.lastPositionPixels = np.round(self.trackPositionOffset*self.pixelsPerMeter).astype(int)
         self.lastPositionPixels[0] = self.trackImageHeight-self.lastPositionPixels[0]
 
+        self.resultsJudgeJSON = {}
+
 
         if self.namespaceTopic != "":
             self.odometryTopic = '{:s}/{:s}'.format(self.namespaceTopic, self.odometryTopic)
@@ -152,6 +157,10 @@ class NXPTrackJudge(Node):
         # Publishers
         self.trackImagePub = self.create_publisher(sensor_msgs.msg.Image,
             '/{:s}'.format(self.trackImagePubTopic), 0)
+
+        self.timeStamp = self.get_clock().now().nanoseconds
+
+        self.outputJSON = os.path.realpath(os.path.relpath(os.path.join(output_path,'{:s}_results.json'.format(str(self.timeStamp)))))
         
 
     def judgeTrack(self, position):
@@ -160,26 +169,38 @@ class NXPTrackJudge(Node):
         positionPixels[0] = self.trackImageHeight-positionPixels[0] 
 
         if (self.evalImage[positionPixels[0]][positionPixels[1]] == 0) and not self.outsideBounds:
-            self.outsideBounds = False
+            self.outsideBounds = True
+            self.outsideBoundsCount += 1
 
-        if (self.evalImage[positionPixels[0]][positionPixels[1]] == 255) and not self.outsideBounds and (self.newLapFlag or self.endLapFlag):
+        if (self.evalImage[positionPixels[0]][positionPixels[1]] == 255):
             self.newLapFlag = False
-            self.endLapFlag = False            
+            self.endLapFlag = False
+            self.outsideBounds = False            
 
-        if (self.evalImage[positionPixels[0]][positionPixels[1]] == 191) and not self.outsideBounds and not self.endLapFlag and not self.newLapFlag:
+        if (self.evalImage[positionPixels[0]][positionPixels[1]] == 191) and not self.endLapFlag and not self.newLapFlag:
             self.endLapFlag = True
 
-        if (self.evalImage[positionPixels[0]][positionPixels[1]] == 128) and not self.outsideBounds and self.endLapFlag and not self.newLapFlag:
+        if (self.evalImage[positionPixels[0]][positionPixels[1]] == 128) and self.endLapFlag and not self.newLapFlag:
             self.newLapFlag = True
             self.endLapFlag = False
             if self.lapStartTime > 0:
+                self.resultsJudgeJSON['lap_{:d}'.format(self.lapNumber)] = []
+                self.resultsJudgeJSON['lap_{:d}'.format(self.lapNumber)].append({
+                    'OutsideBoundsCount': self.outsideBoundsCount,
+                    'CompletionTime': float(self.currentLapTime*1e-9)
+                })
+
+                with open(self.outputJSON, 'w') as judgeJSON:
+                    judgeJSON.write(json.dumps(self.resultsJudgeJSON, sort_keys=True, indent=4))
                 self.returnedTrackImage = cv2.putText(self.returnedTrackImage, 'Completed Lap {:d} Time: {:.2f} sec'.format(self.lapNumber, float(self.currentLapTime*1e-9)),
                     (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0,0,255), 2, cv2.LINE_AA)
                 outputImage = os.path.realpath(os.path.relpath(os.path.join(output_path,'{:s}_lap-{:d}.png'.format(str(self.timeStamp), self.lapNumber))))
                 cv2.imwrite(outputImage, self.returnedTrackImage)
 
                 self.lapNumber += 1
+                self.outsideBoundsCount = 0
                 self.lapStopTime = self.timeStamp
+                
                 if self.bestLapTime is not None:
                     if self.bestLapTime > (self.timeStamp-self.lapStartTime):
                         self.bestLapTime = self.timeStamp-self.lapStartTime
