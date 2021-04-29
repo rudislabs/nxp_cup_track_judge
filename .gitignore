@@ -1,2 +1,4 @@
 *.pcd
 *.pyc
+judge_output/*.png
+judge_output/*.json

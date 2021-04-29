@@ -160,8 +160,12 @@ class NXPTrackJudge(Node):
 
         self.timeStamp = self.get_clock().now().nanoseconds
 
-        self.outputJSON = os.path.realpath(os.path.relpath(os.path.join(output_path,'{:s}_results.json'.format(str(self.timeStamp)))))
-        
+        self.writeJSON = True
+
+        if self.writeJSON:
+
+            self.outputJSON = os.path.realpath(os.path.relpath(os.path.join(output_path,'{:s}_results.json'.format(str(self.timeStamp)))))
+
 
     def judgeTrack(self, position):
 
@@ -171,6 +175,13 @@ class NXPTrackJudge(Node):
         if (self.evalImage[positionPixels[0]][positionPixels[1]] == 0) and not self.outsideBounds:
             self.outsideBounds = True
             self.outsideBoundsCount += 1
+            if self.writeJSON:
+                self.resultsJudgeJSON['lap_{:d}'.format(self.lapNumber)] = {
+                    'OutsideBoundsCount': self.outsideBoundsCount,
+                    'CompletionTime': "DNF"
+                }
+                with open(self.outputJSON, 'w') as judgeJSON:
+                    judgeJSON.write(json.dumps(self.resultsJudgeJSON, sort_keys=True, indent=4))
 
         if (self.evalImage[positionPixels[0]][positionPixels[1]] == 255):
             self.newLapFlag = False
@@ -184,20 +195,23 @@ class NXPTrackJudge(Node):
             self.newLapFlag = True
             self.endLapFlag = False
             if self.lapStartTime > 0:
-                self.resultsJudgeJSON['lap_{:d}'.format(self.lapNumber)] = []
-                self.resultsJudgeJSON['lap_{:d}'.format(self.lapNumber)].append({
-                    'OutsideBoundsCount': self.outsideBoundsCount,
-                    'CompletionTime': float(self.currentLapTime*1e-9)
-                })
+                if self.writeJSON:
+                    
+                    self.resultsJudgeJSON['lap_{:d}'.format(self.lapNumber)] = {
+                        'OutsideBoundsCount': self.outsideBoundsCount,
+                        'CompletionTime': float(self.currentLapTime*1e-9)
+                    }
 
-                with open(self.outputJSON, 'w') as judgeJSON:
-                    judgeJSON.write(json.dumps(self.resultsJudgeJSON, sort_keys=True, indent=4))
+                    with open(self.outputJSON, 'w') as judgeJSON:
+                        judgeJSON.write(json.dumps(self.resultsJudgeJSON, sort_keys=True, indent=4))
+
                 self.returnedTrackImage = cv2.putText(self.returnedTrackImage, 'Completed Lap {:d} Time: {:.2f} sec'.format(self.lapNumber, float(self.currentLapTime*1e-9)),
                     (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (0,0,255), 2, cv2.LINE_AA)
                 outputImage = os.path.realpath(os.path.relpath(os.path.join(output_path,'{:s}_lap-{:d}.png'.format(str(self.timeStamp), self.lapNumber))))
                 cv2.imwrite(outputImage, self.returnedTrackImage)
 
                 self.lapNumber += 1
+                
                 self.outsideBoundsCount = 0
                 self.lapStopTime = self.timeStamp
                 
